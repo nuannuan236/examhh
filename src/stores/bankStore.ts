@@ -31,29 +31,47 @@ export const useBankStore = defineStore('bank', () => {
   async function seedBundledBanks() {
     seeding.value = true
     seedError.value = ''
+    const failures: string[] = []
     try {
       for (const bundledBank of BUNDLED_BANKS) {
-        const existing = await getBankByFileName(bundledBank.fileName)
-        if (existing) continue
+        try {
+          const existing = await getBankByFileName(bundledBank.fileName)
+          if (existing) continue
 
-        const response = await fetch(bundledBank.url)
-        if (!response.ok) {
-          throw new Error(`无法读取内置题库 ${bundledBank.fileName}`)
-        }
+          const response = await fetch(bundledBank.url)
+          if (!response.ok) {
+            throw new Error(`文件缺失或部署路径错误（HTTP ${response.status}）`)
+          }
 
-        const blob = await response.blob()
-        const file = new File([blob], bundledBank.fileName, {
-          type: blob.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        })
-        const preview = await parseXlsxFile(file)
-        if (preview.parsedCount === 0) {
-          throw new Error(`内置题库 ${bundledBank.fileName} 未解析到题目`)
+          const contentType = response.headers.get('content-type') || ''
+          if (contentType.toLowerCase().includes('text/html')) {
+            throw new Error('文件缺失或部署路径错误，服务器返回了 HTML 页面')
+          }
+
+          const blob = await response.blob()
+          if (blob.type.toLowerCase().includes('text/html')) {
+            throw new Error('文件缺失或部署路径错误，下载内容不是 Excel')
+          }
+
+          const file = new File([blob], bundledBank.fileName, {
+            type: blob.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          })
+          const preview = await parseXlsxFile(file)
+          if (preview.parsedCount === 0) {
+            throw new Error('未解析到题目')
+          }
+          await saveBankToDB(bundledBank.displayName, bundledBank.fileName, preview.questions)
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err)
+          failures.push(`${bundledBank.displayName}：${detail}`)
         }
-        await saveBankToDB(bundledBank.fileName.replace(/\.xlsx$/i, ''), bundledBank.fileName, preview.questions)
       }
     } catch (err) {
       seedError.value = err instanceof Error ? err.message : String(err)
     } finally {
+      if (failures.length > 0) {
+        seedError.value = `部分内置题库加载失败：${failures.slice(0, 3).join('；')}${failures.length > 3 ? `；等 ${failures.length} 个` : ''}`
+      }
       seeding.value = false
     }
   }
