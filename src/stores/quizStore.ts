@@ -27,15 +27,33 @@ export const useQuizStore = defineStore('quiz', () => {
     let count = 0
     for (const [qId, userAns] of answers.value) {
       const q = questions.value.find((q) => q.id === qId)
-      if (q && normalizeAnswer(userAns) === normalizeAnswer(q.answer)) count++
+      if (q && isAnswerCorrect(userAns, q.answer)) count++
     }
     return count
   })
 
   const wrongCount = computed(() => answers.value.size - correctCount.value)
+  const currentWrongQuestions = computed(() =>
+    questions.value.filter((q) => {
+      if (!q.id || !answers.value.has(q.id)) return false
+      const userAnswer = answers.value.get(q.id) || ''
+      return !isAnswerCorrect(userAnswer, q.answer)
+    })
+  )
 
   function normalizeAnswer(ans: string): string {
     return ans.replace(/[\s,，、;；]+/g, '').toUpperCase().split('').sort().join('')
+  }
+
+  function isAnswerCorrect(userAnswer: string, correctAnswer: string): boolean {
+    return normalizeAnswer(userAnswer) === normalizeAnswer(correctAnswer)
+  }
+
+  function resetQuizState() {
+    currentIndex.value = 0
+    answers.value = new Map()
+    showResult.value = false
+    finished.value = false
   }
 
   async function startQuiz(targetBankIds: number[], quizMode: QuizMode, size: number) {
@@ -46,10 +64,7 @@ export const useQuizStore = defineStore('quiz', () => {
       : (banks[0]?.name || '单题库考核')
     mode.value = quizMode
     quizSize.value = size
-    currentIndex.value = 0
-    answers.value = new Map()
-    showResult.value = false
-    finished.value = false
+    resetQuizState()
 
     let allQuestions = await getQuestionsByBankIds(targetBankIds)
 
@@ -66,6 +81,22 @@ export const useQuizStore = defineStore('quiz', () => {
     }
 
     questions.value = allQuestions
+  }
+
+  function startQuestionSet(questionSet: Question[], label: string) {
+    const nextQuestions = questionSet.map((q) => ({ ...q, options: { ...q.options } }))
+    questions.value = nextQuestions
+    bankIds.value = [...new Set(nextQuestions.map((q) => q.bankId))]
+    sourceLabel.value = label
+    mode.value = 'sequential'
+    quizSize.value = nextQuestions.length
+    resetQuizState()
+  }
+
+  function retryCurrentWrongQuestions() {
+    const wrongQuestions = currentWrongQuestions.value
+    if (wrongQuestions.length === 0) return
+    startQuestionSet(wrongQuestions, `本次错题重练 · ${wrongQuestions.length} 题`)
   }
 
   async function submitAnswer(userAnswer: string) {
@@ -112,7 +143,12 @@ export const useQuizStore = defineStore('quiz', () => {
     progress,
     correctCount,
     wrongCount,
+    currentWrongQuestions,
+    normalizeAnswer,
+    isAnswerCorrect,
     startQuiz,
+    startQuestionSet,
+    retryCurrentWrongQuestions,
     submitAnswer,
     nextQuestion,
     resetQuiz,

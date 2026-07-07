@@ -10,6 +10,7 @@ const quizStore = useQuizStore()
 
 const selectedAnswer = ref('')
 const multiSelected = ref<Set<string>>(new Set())
+const showSessionWrong = ref(false)
 
 const isMultiChoice = computed(() => {
   const q = quizStore.currentQuestion
@@ -49,6 +50,22 @@ function handleSubmit() {
   quizStore.submitAnswer(selectedAnswer.value)
 }
 
+function userAnswerFor(questionId?: number): string {
+  if (!questionId) return ''
+  return quizStore.answers.get(questionId) || ''
+}
+
+function isQuestionAnsweredCorrectly(questionId?: number, correctAnswer = ''): boolean {
+  return quizStore.isAnswerCorrect(userAnswerFor(questionId), correctAnswer)
+}
+
+function retryWrongQuestions() {
+  quizStore.retryCurrentWrongQuestions()
+  selectedAnswer.value = ''
+  multiSelected.value = new Set()
+  showSessionWrong.value = false
+}
+
 function getOptionClass(letter: string): string {
   if (!quizStore.showResult) {
     if (isMultiChoice.value) {
@@ -74,6 +91,8 @@ const scorePercent = computed(() => {
   if (quizStore.totalQuestions === 0) return 0
   return Math.round((quizStore.correctCount / quizStore.totalQuestions) * 100)
 })
+
+const hasSessionWrong = computed(() => quizStore.currentWrongQuestions.length > 0)
 </script>
 
 <template>
@@ -129,9 +148,70 @@ const scorePercent = computed(() => {
           <span class="result-label">正确率</span>
         </div>
       </div>
+      <p v-if="!hasSessionWrong" class="result-note">本次全对，继续保持。</p>
       <div class="result-actions">
+        <button
+          v-if="hasSessionWrong"
+          class="btn btn-outline"
+          @click="showSessionWrong = !showSessionWrong"
+        >
+          {{ showSessionWrong ? '收起本次错题' : '查看本次错题' }}
+        </button>
+        <button
+          v-if="hasSessionWrong"
+          class="btn btn-primary"
+          @click="retryWrongQuestions"
+        >
+          重做本次错题
+        </button>
         <button class="btn btn-outline" @click="emit('exit')">返回题库</button>
-        <button class="btn btn-primary" @click="quizStore.resetQuiz(); selectedAnswer = ''; multiSelected = new Set()">重新答题</button>
+        <button class="btn btn-primary" @click="quizStore.resetQuiz(); selectedAnswer = ''; multiSelected = new Set(); showSessionWrong = false">重新答题</button>
+      </div>
+
+      <div v-if="showSessionWrong && hasSessionWrong" class="session-wrong-list">
+        <h3>本次错题</h3>
+        <article
+          v-for="(wrongQuestion, index) in quizStore.currentWrongQuestions"
+          :key="wrongQuestion.id || index"
+          class="wrong-review-card"
+        >
+          <div class="question-meta">
+            <span class="badge badge-danger">错题 {{ index + 1 }}</span>
+            <span class="badge badge-chapter" v-if="wrongQuestion.chapter">
+              {{ wrongQuestion.chapter }}
+            </span>
+            <span class="badge badge-type" v-if="wrongQuestion.type">
+              {{ wrongQuestion.type }}
+            </span>
+          </div>
+
+          <h4 class="wrong-question-text">{{ wrongQuestion.content }}</h4>
+
+          <div class="options-list">
+            <div
+              v-for="letter in Object.keys(wrongQuestion.options).sort()"
+              :key="letter"
+              class="option-display"
+              :class="{
+                'correct-option': wrongQuestion.answer.includes(letter),
+                'wrong-option': userAnswerFor(wrongQuestion.id).includes(letter) && !wrongQuestion.answer.includes(letter)
+              }"
+            >
+              <span class="option-letter">{{ letter }}</span>
+              <span class="option-text">{{ wrongQuestion.options[letter] }}</span>
+            </div>
+          </div>
+
+          <div class="wrong-answer-summary">
+            <span>正确答案：<strong>{{ wrongQuestion.answer }}</strong></span>
+            <span>你的答案：{{ userAnswerFor(wrongQuestion.id) || '未作答' }}</span>
+          </div>
+
+          <div class="explanation" v-if="wrongQuestion.explanation">
+            <p class="explanation-title">解析：</p>
+            <p>{{ wrongQuestion.explanation }}</p>
+          </div>
+        </article>
       </div>
     </div>
 
@@ -177,15 +257,15 @@ const scorePercent = computed(() => {
       <div v-if="quizStore.showResult" class="result-panel">
         <div
           class="result-banner"
-          :class="selectedAnswer === quizStore.currentQuestion.answer ? 'correct' : 'wrong'"
+          :class="isQuestionAnsweredCorrectly(quizStore.currentQuestion.id, quizStore.currentQuestion.answer) ? 'correct' : 'wrong'"
         >
-          <span v-if="selectedAnswer === quizStore.currentQuestion.answer">回答正确</span>
+          <span v-if="isQuestionAnsweredCorrectly(quizStore.currentQuestion.id, quizStore.currentQuestion.answer)">回答正确</span>
           <span v-else>回答错误</span>
         </div>
 
         <div class="correct-answer">
           正确答案：<strong>{{ quizStore.currentQuestion.answer }}</strong>
-          <span v-if="selectedAnswer !== quizStore.currentQuestion.answer">
+          <span v-if="!isQuestionAnsweredCorrectly(quizStore.currentQuestion.id, quizStore.currentQuestion.answer)">
             ｜ 你的答案：{{ selectedAnswer }}
           </span>
         </div>
@@ -384,6 +464,89 @@ const scorePercent = computed(() => {
   display: flex;
   justify-content: center;
   gap: 12px;
+  flex-wrap: wrap;
+}
+
+.result-note {
+  margin-bottom: 20px;
+  color: var(--success);
+  font-weight: 600;
+}
+
+.session-wrong-list {
+  margin-top: 28px;
+  text-align: left;
+}
+
+.session-wrong-list h3 {
+  font-size: 18px;
+  margin-bottom: 12px;
+}
+
+.wrong-review-card {
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.04);
+  margin-bottom: 14px;
+}
+
+.wrong-question-text {
+  font-size: 16px;
+  line-height: 1.6;
+  margin-bottom: 14px;
+}
+
+.option-display {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 15px;
+}
+
+.option-display .option-letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent);
+  font-weight: 600;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.correct-option {
+  border-color: var(--success);
+  background: rgba(22, 163, 74, 0.15);
+}
+
+.wrong-option {
+  border-color: var(--danger);
+  background: rgba(220, 38, 38, 0.15);
+}
+
+.correct-option .option-letter {
+  background: var(--success);
+  color: white;
+}
+
+.wrong-option .option-letter {
+  background: var(--danger);
+  color: white;
+}
+
+.wrong-answer-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 12px 0;
+  color: var(--muted-foreground);
+  font-size: 14px;
 }
 
 .text-success {
